@@ -112,6 +112,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           components: llvm-tools
+          toolchain: stable
       - uses: taiki-e/install-action@v2.44.9
         with:
           tool: cargo-llvm-cov
