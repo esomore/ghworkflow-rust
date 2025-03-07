@@ -1,0 +1,282 @@
+name: rust
+on:
+  workflow_call:
+    inputs:
+      enable_kind_cluster:
+        description: |
+          Enables the kind cluster when true.
+        required: false
+        type: boolean
+        default: false
+      enable_cargo-semver-checks:
+        description: |
+          Enables cargo-semver-checks - default is true.
+        required: false
+        type: boolean
+        default: true
+      coveralls:
+        description: |
+          Makes cargo-test upload test coverage data to coveralls.io
+          when true.
+        required: false
+        type: boolean
+        default: false
+      codecov:
+        description: |
+          Makes *cargo-test* upload test coverage data to codecov.io
+          when true.
+        required: false
+        type: boolean
+        default: false
+      deb:
+        description: Enables cargo-deb when true.
+        required: false
+        type: boolean
+        default: false
+      dependencies_debian:
+        description: |
+          Dependencies as Debian packages to install; used in the
+          appropriate actions if defined
+        type: string
+      publish_cratesio:
+        description: Enables the publish-cratesio job.
+        required: false
+        type: boolean
+        default: true
+      publish_github_release:
+        description: Enables the publish-github-release job.
+        required: false
+        type: boolean
+        default: true
+      publish_github_release_files:
+        description: Files to publish in the github release.
+        required: false
+        type: string
+        default: ''
+      publish_packagecloud:
+        description: Enables the publish-packagecloud job.
+        required: false
+        type: boolean
+        default: false
+      publish_packagecloud_repository:
+        description: packagecloud repository to publish .deb.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        required: false
+      CODECOV_TOKEN:
+          required: false
+      PACKAGECLOUD_TOKEN:
+        required: false
+jobs:
+  cargo-build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: install dependencies
+        run: sudo apt-get install -y --no-install-recommends ${{ inputs.dependencies_debian }}
+        if: inputs.dependencies_debian
+      - uses: actions/checkout@v4.2.0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4.4.0
+        with:
+          name: cargo-build-release
+          if-no-files-found: error
+          path: target/release
+  cargo-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check
+  cargo-doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --all-features
+      - uses: actions/upload-artifact@v4.4.0
+        with:
+          name: cargo-doc
+          if-no-files-found: error
+          path: target/doc
+  cargo-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: install dependencies
+        run: sudo apt-get install -y --no-install-recommends ${{ inputs.dependencies_debian }}
+        if: inputs.dependencies_debian
+      - uses: actions/checkout@v4.2.0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          components: llvm-tools
+      - uses: taiki-e/install-action@v2.44.9
+        with:
+          tool: cargo-llvm-cov
+      - run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+        env:
+          CARGO_HUSKY_DONT_INSTALL_HOOKS: true
+      - name: upload coverage data to coveralls
+        uses: coverallsapp/github-action@v2.3.0
+        if: inputs.coveralls
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: lcov.info
+      - name: upload coverage data to codecov
+        uses: codecov/codecov-action@v5
+        if: inputs.codecov
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-features
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit
+      - run: cargo audit
+  cargo-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+        if: inputs.deb
+      - id: version
+        if: inputs.deb
+        uses: docker://lpenz/ghaction-version-gen:0.14.1
+      - uses: dtolnay/rust-toolchain@stable
+      - name: install cargo-deb
+        if: inputs.deb
+        run: cargo install cargo-deb
+      - name: cargo-deb, test only
+        if: inputs.deb && steps.version.outputs.version_commit == ''
+        run: cargo deb
+      - name: cargo-deb, release
+        if: inputs.deb && steps.version.outputs.version_commit != ''
+        run: cargo deb --deb-version '${{ steps.version.outputs.version_commit }}'
+      - name: show deb info
+        if: inputs.deb
+        run: |
+          set -e -x;
+          dpkg -I target/debian/*.deb
+          dpkg -c target/debian/*.deb;
+      - uses: actions/upload-artifact@v4.4.0
+        if: inputs.deb
+        with:
+          name: cargo-deb
+          if-no-files-found: error
+          path: target/debian
+  rust-misc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: check Cargo.lock version against Cargo.toml
+        run: cargo update -w --locked
+        if: ${{ hashFiles('Cargo.lock') != '' }}
+  cargo-semver-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - id: version
+        uses: docker://lpenz/ghaction-version-gen:0.14.1
+      - name: cargo-semver-checks
+        uses: obi1kenobi/cargo-semver-checks-action@v2.6
+        if: inputs.enable_cargo-semver-checks && steps.version.outputs.version_tagged != ''
+  publish-cratesio:
+    needs: [ cargo-build-release, cargo-check, cargo-test, rustfmt,
+             clippy, cargo-audit, cargo-deb, rust-misc,
+             cargo-semver-checks ]
+    if: inputs.publish_cratesio
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - id: version
+        uses: docker://lpenz/ghaction-version-gen:0.14.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: publish crate on crates.io
+        uses: katyo/publish-crates@v2
+        if: steps.version.outputs.version_tagged != ''
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        with:
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+  publish-packagecloud:
+    needs: [ cargo-build-release, cargo-check, cargo-test, rustfmt,
+             clippy, cargo-audit, cargo-deb, rust-misc,
+             cargo-semver-checks ]
+    if: inputs.publish_packagecloud
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repository: ${{ fromJson(inputs.publish_packagecloud_repository) }}
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - id: version
+        uses: docker://lpenz/ghaction-version-gen:0.14.1
+      - name: download packages generated by cargo-deb
+        uses: actions/download-artifact@v4.1.8
+        if: inputs.deb
+        with:
+          name: cargo-deb
+          path: target/release
+      - name: publish deb on packagecloud
+        uses: docker://lpenz/ghaction-packagecloud:0.4
+        if: steps.version.outputs.version_tagged != ''
+        env:
+          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+        with:
+          repository: ${{ matrix.repository }}
+  publish-github-release:
+    needs: [ cargo-build-release, cargo-check, cargo-test, rustfmt,
+             clippy, cargo-audit, cargo-deb, rust-misc,
+             cargo-semver-checks ]
+    if: inputs.publish_github_release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+      - id: version
+        uses: docker://lpenz/ghaction-version-gen:0.14.1
+      - name: download cargo-build-release
+        uses: actions/download-artifact@v4.1.8
+        with:
+          name: cargo-build-release
+          path: target/release
+      - name: download cargo-deb
+        uses: actions/download-artifact@v4.1.8
+        if: inputs.deb
+        with:
+          name: cargo-deb
+          path: target/debian
+      - name: list all files
+        run: find . -type f
+      - name: publish github release
+        uses: "marvinpinto/action-automatic-releases@v1.2.1"
+        if: steps.version.outputs.version_tagged != ''
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: false
+          files: |
+            target/debian/*.deb
+            ${{ inputs.publish_github_release_files }}
