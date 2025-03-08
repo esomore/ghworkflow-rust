@@ -131,8 +131,10 @@ jobs:
         with:
           files: lcov.info
           fail_ci_if_error: true
+          slug: ${{ github.repository }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
   rustfmt:
     runs-on: ubuntu-latest
     steps:
