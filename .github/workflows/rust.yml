@@ -133,7 +133,6 @@ jobs:
           fail_ci_if_error: true
           slug: ${{ github.repository }}
           token: ${{ secrets.CODECOV_TOKEN }}
-
   rustfmt:
     runs-on: ubuntu-latest
     steps:
